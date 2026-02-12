@@ -36,14 +36,21 @@ try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.fonts import addMapping
 except ImportError:
     print("Installing reportlab...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "reportlab"])
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
+    from reportlab.pdfbase import pdfmetrics
+    from reportlab.pdfbase.ttfonts import TTFont
+    from reportlab.lib.fonts import addMapping
 
 import io
+import re
 
 
 class ConverterApp:
@@ -146,7 +153,7 @@ class ConverterApp:
         
         # Convert button
         button_container = tk.Frame(left_panel, bg='#f5f5f7')
-        button_container.pack(fill='x', pady=(0, 20))
+        button_container.pack(fill='x', pady=(0, 15))
         
         self.convert_btn = tk.Button(
             button_container,
@@ -165,6 +172,29 @@ class ConverterApp:
             width=15
         )
         self.convert_btn.pack()
+        
+        # ============ DOWNLOAD BUTTON - ALWAYS VISIBLE ============
+        download_container = tk.Frame(left_panel, bg='#f5f5f7')
+        download_container.pack(fill='x', pady=(0, 15))
+        
+        self.download_btn = tk.Button(
+            download_container,
+            text='⬇️ Download Converted File',
+            font=self.font_button,
+            bg='#34a853',
+            fg='#ffffff',
+            bd=0,
+            padx=25,
+            pady=10,
+            activebackground='#2d8c46',
+            activeforeground='#ffffff',
+            state='disabled',
+            relief='flat',
+            cursor='',
+            width=20,
+            command=self.download_file
+        )
+        self.download_btn.pack()
         
         # Status bar
         status_container = tk.Frame(left_panel, bg='#f5f5f7')
@@ -401,6 +431,9 @@ class ConverterApp:
             self.converted_file = None
             self.show_preview_placeholder()
             
+            # Disable download button when new file is selected
+            self.download_btn.configure(state='disabled', bg='#86868b')
+            
             filename = os.path.basename(file_path)
             self.file_label.configure(
                 text=f'Selected: {filename}',
@@ -444,6 +477,26 @@ class ConverterApp:
         thread.daemon = True
         thread.start()
     
+    def clean_text(self, text):
+        """Remove all hidden characters and artifacts"""
+        if not text:
+            return ""
+        
+        # Remove non-printable characters except spaces and newlines
+        cleaned = ''.join(char for char in text if ord(char) >= 32 or char == '\n' or char == '\t')
+        
+        # Replace multiple spaces with single space
+        cleaned = re.sub(r' +', ' ', cleaned)
+        
+        # Fix spacing after periods
+        cleaned = re.sub(r'\.(?=[^\s])', '. ', cleaned)
+        cleaned = re.sub(r'\. +', '. ', cleaned)
+        
+        # Remove any remaining control characters
+        cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+        
+        return cleaned.strip()
+    
     def convert_file(self):
         error = None
         output_path = None
@@ -457,7 +510,7 @@ class ConverterApp:
             else:
                 output_path = str(Path(self.selected_file).with_suffix('.pdf'))
                 
-                # Clean DOCX to PDF conversion without artifacts
+                # Clean DOCX to PDF conversion with preserved formatting
                 doc = Document(self.selected_file)
                 c = canvas.Canvas(output_path, pagesize=letter)
                 width, height = letter
@@ -465,18 +518,47 @@ class ConverterApp:
                 y = height - inch
                 line_height = 14
                 margin = inch
+                paragraph_spacing = 8
                 
                 for paragraph in doc.paragraphs:
-                    text = paragraph.text.strip()
-                    if text:
-                        # Clean text - remove any control characters
-                        clean_text = ''.join(char for char in text if ord(char) >= 32 or char in '\n\t')
-                        
+                    text = paragraph.text
+                    
+                    # Clean the text thoroughly
+                    clean_text = self.clean_text(text)
+                    
+                    if clean_text:
                         # Draw text with proper spacing
                         c.setFont('Helvetica', 11)
                         c.setFillColorRGB(0, 0, 0)
-                        c.drawString(margin, y, clean_text)
-                        y -= line_height
+                        
+                        # Handle long text wrapping
+                        words = clean_text.split()
+                        line = []
+                        
+                        for word in words:
+                            line.append(word)
+                            line_width = c.stringWidth(' '.join(line), 'Helvetica', 11)
+                            
+                            if line_width > (width - 2 * margin):
+                                # Remove last word
+                                line.pop()
+                                if line:
+                                    c.drawString(margin, y, ' '.join(line))
+                                    y -= line_height
+                                    line = [word]
+                                
+                                if y < margin:
+                                    c.showPage()
+                                    y = height - margin
+                                    c.setFont('Helvetica', 11)
+                        
+                        # Draw remaining text
+                        if line:
+                            c.drawString(margin, y, ' '.join(line))
+                            y -= line_height
+                        
+                        # Add paragraph spacing
+                        y -= paragraph_spacing
                         
                         if y < margin:
                             c.showPage()
@@ -493,6 +575,26 @@ class ConverterApp:
         else:
             self.converted_file = output_path
             self.window.after(0, lambda path=output_path: self.conversion_success(path))
+    
+    def download_file(self):
+        if self.converted_file and os.path.exists(self.converted_file):
+            # Ask where to save the file
+            save_path = filedialog.asksaveasfilename(
+                defaultextension=os.path.splitext(self.converted_file)[1],
+                filetypes=[
+                    ('PDF files', '*.pdf') if self.converted_file.endswith('.pdf') else ('Word files', '*.docx')
+                ],
+                initialfile=os.path.basename(self.converted_file)
+            )
+            
+            if save_path:
+                try:
+                    # Copy file to selected location
+                    import shutil
+                    shutil.copy2(self.converted_file, save_path)
+                    messagebox.showinfo('Download Complete', f'File saved to:\n{save_path}')
+                except Exception as e:
+                    messagebox.showerror('Download Failed', f'Could not save file:\n{str(e)}')
     
     def preview_pdf(self, pdf_path):
         # Clear inner frame
@@ -599,12 +701,13 @@ class ConverterApp:
             )
             text_widget.pack(fill='both', expand=True)
             
-            # Insert clean text
+            # Insert clean text with preserved paragraph formatting
             for paragraph in doc.paragraphs:
-                if paragraph.text.strip():
-                    # Clean text - remove any control characters
-                    clean_text = ''.join(char for char in paragraph.text if ord(char) >= 32 or char == '\n')
-                    text_widget.insert('end', clean_text + '\n\n')
+                if paragraph.text:
+                    # Clean text thoroughly
+                    clean_text = self.clean_text(paragraph.text)
+                    if clean_text:
+                        text_widget.insert('end', clean_text + '\n\n')
             
             text_widget.configure(state='disabled')
             
@@ -631,6 +734,13 @@ class ConverterApp:
             cursor='hand2',
             text='Convert',
             command=self.start_conversion
+        )
+        
+        # Enable download button
+        self.download_btn.configure(
+            state='normal',
+            bg='#34a853',
+            cursor='hand2'
         )
         
         self.file_label.configure(
@@ -663,6 +773,9 @@ class ConverterApp:
             text='Convert',
             command=self.start_conversion
         )
+        
+        # Disable download button on error
+        self.download_btn.configure(state='disabled', bg='#86868b')
         
         self.show_preview_placeholder()
         messagebox.showerror('Error', f'Failed to convert file.')
