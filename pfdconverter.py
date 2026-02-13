@@ -36,21 +36,16 @@ try:
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.fonts import addMapping
 except ImportError:
     print("Installing reportlab...")
     subprocess.check_call([sys.executable, "-m", "pip", "install", "reportlab"])
     from reportlab.pdfgen import canvas
     from reportlab.lib.pagesizes import letter
     from reportlab.lib.units import inch
-    from reportlab.pdfbase import pdfmetrics
-    from reportlab.pdfbase.ttfonts import TTFont
-    from reportlab.lib.fonts import addMapping
 
 import io
 import re
+import shutil
 
 
 class ConverterApp:
@@ -83,8 +78,8 @@ class ConverterApp:
         main_container.pack(expand=True, fill='both', padx=40, pady=30)
         
         # Configure grid weights
-        main_container.grid_columnconfigure(0, weight=35)  # Left panel - 35%
-        main_container.grid_columnconfigure(1, weight=65)  # Right panel - 65%
+        main_container.grid_columnconfigure(0, weight=35)
+        main_container.grid_columnconfigure(1, weight=65)
         main_container.grid_rowconfigure(0, weight=1)
         
         # ============ LEFT PANEL - CONVERTER ============
@@ -151,7 +146,7 @@ class ConverterApp:
         )
         self.file_label.pack(fill='both')
         
-        # Convert button
+        # Convert button - ONLY CONVERTS, NO DOWNLOAD
         button_container = tk.Frame(left_panel, bg='#f5f5f7')
         button_container.pack(fill='x', pady=(0, 15))
         
@@ -173,7 +168,7 @@ class ConverterApp:
         )
         self.convert_btn.pack()
         
-        # ============ DOWNLOAD BUTTON - ALWAYS VISIBLE ============
+        # Download button - SEPARATE, ONLY DOWNLOADS WHEN CLICKED
         download_container = tk.Frame(left_panel, bg='#f5f5f7')
         download_container.pack(fill='x', pady=(0, 15))
         
@@ -181,12 +176,12 @@ class ConverterApp:
             download_container,
             text='⬇️ Download Converted File',
             font=self.font_button,
-            bg='#34a853',
+            bg='#86868b',
             fg='#ffffff',
             bd=0,
             padx=25,
             pady=10,
-            activebackground='#2d8c46',
+            activebackground='#666666',
             activeforeground='#ffffff',
             state='disabled',
             relief='flat',
@@ -432,7 +427,13 @@ class ConverterApp:
             self.show_preview_placeholder()
             
             # Disable download button when new file is selected
-            self.download_btn.configure(state='disabled', bg='#86868b')
+            self.download_btn.configure(
+                state='disabled',
+                bg='#86868b',
+                fg='#ffffff',
+                activebackground='#666666',
+                cursor=''
+            )
             
             filename = os.path.basename(file_path)
             self.file_label.configure(
@@ -440,6 +441,7 @@ class ConverterApp:
                 fg='#1d1d1f'
             )
             
+            # Enable convert button
             self.convert_btn.configure(
                 bg='#0066cc',
                 fg='#ffffff',
@@ -459,6 +461,7 @@ class ConverterApp:
         if not self.selected_file:
             return
         
+        # Disable convert button during conversion
         self.convert_btn.configure(
             bg='#86868b',
             fg='#ffffff',
@@ -468,11 +471,21 @@ class ConverterApp:
             command=None
         )
         
+        # Ensure download button is disabled during conversion
+        self.download_btn.configure(
+            state='disabled',
+            bg='#86868b',
+            fg='#ffffff',
+            activebackground='#666666',
+            cursor=''
+        )
+        
         self.status_label.configure(
             text='Converting...',
             fg='#1d1d1f'
         )
         
+        # Start conversion thread - NO DOWNLOAD, ONLY CONVERSION
         thread = threading.Thread(target=self.convert_file)
         thread.daemon = True
         thread.start()
@@ -503,12 +516,23 @@ class ConverterApp:
         
         try:
             if self.current_mode == 'pdf':
+                # PDF to Word conversion
                 output_path = str(Path(self.selected_file).with_suffix('.docx'))
+                
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+                
+                # Convert PDF to Word
                 cv = Converter(self.selected_file)
                 cv.convert(output_path, start=0, end=None)
                 cv.close()
+                
             else:
+                # Word to PDF conversion
                 output_path = str(Path(self.selected_file).with_suffix('.pdf'))
+                
+                # Ensure output directory exists
+                os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
                 
                 # Clean DOCX to PDF conversion with preserved formatting
                 doc = Document(self.selected_file)
@@ -540,7 +564,6 @@ class ConverterApp:
                             line_width = c.stringWidth(' '.join(line), 'Helvetica', 11)
                             
                             if line_width > (width - 2 * margin):
-                                # Remove last word
                                 line.pop()
                                 if line:
                                     c.drawString(margin, y, ' '.join(line))
@@ -577,6 +600,7 @@ class ConverterApp:
             self.window.after(0, lambda path=output_path: self.conversion_success(path))
     
     def download_file(self):
+        """SEPARATE DOWNLOAD FUNCTION - ONLY CALLED WHEN DOWNLOAD BUTTON IS CLICKED"""
         if self.converted_file and os.path.exists(self.converted_file):
             # Ask where to save the file
             save_path = filedialog.asksaveasfilename(
@@ -590,7 +614,6 @@ class ConverterApp:
             if save_path:
                 try:
                     # Copy file to selected location
-                    import shutil
                     shutil.copy2(self.converted_file, save_path)
                     messagebox.showinfo('Download Complete', f'File saved to:\n{save_path}')
                 except Exception as e:
@@ -727,6 +750,7 @@ class ConverterApp:
             fg='#1d1d1f'
         )
         
+        # Re-enable convert button for new conversions
         self.convert_btn.configure(
             bg='#0066cc',
             fg='#ffffff',
@@ -736,10 +760,12 @@ class ConverterApp:
             command=self.start_conversion
         )
         
-        # Enable download button
+        # Enable download button - ONLY FOR MANUAL DOWNLOAD
         self.download_btn.configure(
             state='normal',
             bg='#34a853',
+            fg='#ffffff',
+            activebackground='#2d8c46',
             cursor='hand2'
         )
         
@@ -748,7 +774,7 @@ class ConverterApp:
             fg='#86868b'
         )
         
-        # Update preview
+        # Update preview - NO DOWNLOAD
         filename = os.path.basename(output_path)
         self.preview_filename.configure(text=filename)
         
@@ -765,6 +791,7 @@ class ConverterApp:
             fg='#ff3b30'
         )
         
+        # Re-enable convert button
         self.convert_btn.configure(
             bg='#0066cc',
             fg='#ffffff',
@@ -775,7 +802,13 @@ class ConverterApp:
         )
         
         # Disable download button on error
-        self.download_btn.configure(state='disabled', bg='#86868b')
+        self.download_btn.configure(
+            state='disabled',
+            bg='#86868b',
+            fg='#ffffff',
+            activebackground='#666666',
+            cursor=''
+        )
         
         self.show_preview_placeholder()
         messagebox.showerror('Error', f'Failed to convert file.')
