@@ -46,6 +46,7 @@ except ImportError:
 import io
 import re
 import shutil
+import tempfile
 
 
 class ConverterApp:
@@ -58,6 +59,7 @@ class ConverterApp:
         self.selected_file = None
         self.current_mode = None
         self.converted_file = None
+        self.preview_file = None
         self.preview_image = None
         self.setup_fonts()
         self.setup_ui()
@@ -146,29 +148,7 @@ class ConverterApp:
         )
         self.file_label.pack(fill='both')
         
-        # Convert button - ONLY CONVERTS, NO DOWNLOAD
-        button_container = tk.Frame(left_panel, bg='#f5f5f7')
-        button_container.pack(fill='x', pady=(0, 15))
-        
-        self.convert_btn = tk.Button(
-            button_container,
-            text='Convert',
-            font=self.font_button,
-            bg='#86868b',
-            fg='#ffffff',
-            bd=0,
-            padx=25,
-            pady=10,
-            activebackground='#666666',
-            activeforeground='#ffffff',
-            state='disabled',
-            relief='flat',
-            cursor='',
-            width=15
-        )
-        self.convert_btn.pack()
-        
-        # Download button - SEPARATE, ONLY DOWNLOADS WHEN CLICKED
+        # Download button - ONLY DOWNLOADS WHEN CLICKED
         download_container = tk.Frame(left_panel, bg='#f5f5f7')
         download_container.pack(fill='x', pady=(0, 15))
         
@@ -317,7 +297,7 @@ class ConverterApp:
         
         subtext_label = tk.Label(
             placeholder,
-            text='Convert a file to see preview',
+            text='Select a file to generate preview',
             font=('Helvetica', 12),
             bg='#ffffff',
             fg='#a1a1a6'
@@ -424,9 +404,18 @@ class ConverterApp:
             self.selected_file = file_path
             self.current_mode = mode
             self.converted_file = None
+            self.preview_file = None
+            
+            # Clear previous preview
             self.show_preview_placeholder()
             
-            # Disable download button when new file is selected
+            filename = os.path.basename(file_path)
+            self.file_label.configure(
+                text=f'Selected: {filename}',
+                fg='#1d1d1f'
+            )
+            
+            # Disable download button until conversion is complete
             self.download_btn.configure(
                 state='disabled',
                 bg='#86868b',
@@ -435,108 +424,36 @@ class ConverterApp:
                 cursor=''
             )
             
-            filename = os.path.basename(file_path)
-            self.file_label.configure(
-                text=f'Selected: {filename}',
-                fg='#1d1d1f'
-            )
-            
-            # Enable convert button
-            self.convert_btn.configure(
-                bg='#0066cc',
-                fg='#ffffff',
-                state='normal',
-                cursor='hand2',
-                activebackground='#004999',
-                text='Convert',
-                command=self.start_conversion
-            )
-            
             self.status_label.configure(
-                text='Ready to convert',
+                text='Generating preview...',
                 fg='#1d1d1f'
             )
+            
+            # Start preview generation thread - NO DOWNLOAD, ONLY PREVIEW
+            thread = threading.Thread(target=self.generate_preview)
+            thread.daemon = True
+            thread.start()
     
-    def start_conversion(self):
-        if not self.selected_file:
-            return
-        
-        # Disable convert button during conversion
-        self.convert_btn.configure(
-            bg='#86868b',
-            fg='#ffffff',
-            state='disabled',
-            cursor='',
-            text='Converting...',
-            command=None
-        )
-        
-        # Ensure download button is disabled during conversion
-        self.download_btn.configure(
-            state='disabled',
-            bg='#86868b',
-            fg='#ffffff',
-            activebackground='#666666',
-            cursor=''
-        )
-        
-        self.status_label.configure(
-            text='Converting...',
-            fg='#1d1d1f'
-        )
-        
-        # Start conversion thread - NO DOWNLOAD, ONLY CONVERSION
-        thread = threading.Thread(target=self.convert_file)
-        thread.daemon = True
-        thread.start()
-    
-    def clean_text(self, text):
-        """Remove all hidden characters and artifacts"""
-        if not text:
-            return ""
-        
-        # Remove non-printable characters except spaces and newlines
-        cleaned = ''.join(char for char in text if ord(char) >= 32 or char == '\n' or char == '\t')
-        
-        # Replace multiple spaces with single space
-        cleaned = re.sub(r' +', ' ', cleaned)
-        
-        # Fix spacing after periods
-        cleaned = re.sub(r'\.(?=[^\s])', '. ', cleaned)
-        cleaned = re.sub(r'\. +', '. ', cleaned)
-        
-        # Remove any remaining control characters
-        cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
-        
-        return cleaned.strip()
-    
-    def convert_file(self):
+    def generate_preview(self):
+        """Generate preview only - NO FILE SAVING, NO DOWNLOAD"""
         error = None
-        output_path = None
+        preview_path = None
         
         try:
+            # Create temporary file for preview
+            with tempfile.NamedTemporaryFile(delete=False, suffix='.pdf' if self.current_mode == 'docx' else '.docx') as tmp_file:
+                preview_path = tmp_file.name
+            
             if self.current_mode == 'pdf':
-                # PDF to Word conversion
-                output_path = str(Path(self.selected_file).with_suffix('.docx'))
-                
-                # Ensure output directory exists
-                os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
-                
-                # Convert PDF to Word
+                # PDF to Word preview
                 cv = Converter(self.selected_file)
-                cv.convert(output_path, start=0, end=None)
+                cv.convert(preview_path, start=0, end=None)
                 cv.close()
                 
             else:
-                # Word to PDF conversion
-                output_path = str(Path(self.selected_file).with_suffix('.pdf'))
-                
-                # Ensure output directory exists
-                os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
-                
-                # Clean DOCX to PDF conversion with preserved formatting
+                # Word to PDF preview
                 doc = Document(self.selected_file)
-                c = canvas.Canvas(output_path, pagesize=letter)
+                c = canvas.Canvas(preview_path, pagesize=letter)
                 width, height = letter
                 
                 y = height - inch
@@ -592,15 +509,42 @@ class ConverterApp:
                 
         except Exception as e:
             error = str(e)
+            if preview_path and os.path.exists(preview_path):
+                os.unlink(preview_path)
         
         if error:
-            self.window.after(0, lambda err=error: self.conversion_error(err))
+            self.window.after(0, lambda err=error: self.preview_error(err))
         else:
-            self.converted_file = output_path
-            self.window.after(0, lambda path=output_path: self.conversion_success(path))
+            self.preview_file = preview_path
+            self.window.after(0, lambda path=preview_path: self.preview_success(path))
+    
+    def clean_text(self, text):
+        """Remove all hidden characters and artifacts"""
+        if not text:
+            return ""
+        
+        # Remove non-printable characters except spaces and newlines
+        cleaned = ''.join(char for char in text if ord(char) >= 32 or char == '\n' or char == '\t')
+        
+        # Replace multiple spaces with single space
+        cleaned = re.sub(r' +', ' ', cleaned)
+        
+        # Fix spacing after periods
+        cleaned = re.sub(r'\.(?=[^\s])', '. ', cleaned)
+        cleaned = re.sub(r'\. +', '. ', cleaned)
+        
+        # Remove any remaining control characters
+        cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+        
+        return cleaned.strip()
     
     def download_file(self):
-        """SEPARATE DOWNLOAD FUNCTION - ONLY CALLED WHEN DOWNLOAD BUTTON IS CLICKED"""
+        """Download the converted file - ONLY WHEN DOWNLOAD BUTTON IS CLICKED"""
+        if not self.converted_file:
+            # If no converted file exists, convert first then download
+            self.start_conversion_for_download()
+            return
+            
         if self.converted_file and os.path.exists(self.converted_file):
             # Ask where to save the file
             save_path = filedialog.asksaveasfilename(
@@ -618,6 +562,198 @@ class ConverterApp:
                     messagebox.showinfo('Download Complete', f'File saved to:\n{save_path}')
                 except Exception as e:
                     messagebox.showerror('Download Failed', f'Could not save file:\n{str(e)}')
+    
+    def start_conversion_for_download(self):
+        """Convert file for download - ONLY CALLED WHEN DOWNLOAD BUTTON IS CLICKED"""
+        if not self.selected_file:
+            return
+        
+        self.download_btn.configure(
+            state='disabled',
+            bg='#86868b',
+            fg='#ffffff',
+            activebackground='#666666',
+            cursor='',
+            text='⏳ Converting...'
+        )
+        
+        self.status_label.configure(
+            text='Converting file for download...',
+            fg='#1d1d1f'
+        )
+        
+        # Start conversion thread
+        thread = threading.Thread(target=self.convert_for_download)
+        thread.daemon = True
+        thread.start()
+    
+    def convert_for_download(self):
+        """Convert file for permanent storage and download"""
+        error = None
+        output_path = None
+        
+        try:
+            # Create permanent file in user's temp directory
+            output_path = str(Path(self.selected_file).with_suffix('.docx' if self.current_mode == 'pdf' else '.pdf'))
+            
+            # Ensure output directory exists
+            os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
+            
+            if self.current_mode == 'pdf':
+                # PDF to Word conversion
+                cv = Converter(self.selected_file)
+                cv.convert(output_path, start=0, end=None)
+                cv.close()
+                
+            else:
+                # Word to PDF conversion
+                doc = Document(self.selected_file)
+                c = canvas.Canvas(output_path, pagesize=letter)
+                width, height = letter
+                
+                y = height - inch
+                line_height = 14
+                margin = inch
+                paragraph_spacing = 8
+                
+                for paragraph in doc.paragraphs:
+                    text = paragraph.text
+                    
+                    # Clean the text thoroughly
+                    clean_text = self.clean_text(text)
+                    
+                    if clean_text:
+                        c.setFont('Helvetica', 11)
+                        c.setFillColorRGB(0, 0, 0)
+                        
+                        words = clean_text.split()
+                        line = []
+                        
+                        for word in words:
+                            line.append(word)
+                            line_width = c.stringWidth(' '.join(line), 'Helvetica', 11)
+                            
+                            if line_width > (width - 2 * margin):
+                                line.pop()
+                                if line:
+                                    c.drawString(margin, y, ' '.join(line))
+                                    y -= line_height
+                                    line = [word]
+                                
+                                if y < margin:
+                                    c.showPage()
+                                    y = height - margin
+                                    c.setFont('Helvetica', 11)
+                        
+                        if line:
+                            c.drawString(margin, y, ' '.join(line))
+                            y -= line_height
+                        
+                        y -= paragraph_spacing
+                        
+                        if y < margin:
+                            c.showPage()
+                            y = height - margin
+                            c.setFont('Helvetica', 11)
+                
+                c.save()
+                
+        except Exception as e:
+            error = str(e)
+        
+        if error:
+            self.window.after(0, lambda err=error: self.conversion_error(err))
+        else:
+            self.converted_file = output_path
+            self.window.after(0, lambda: self.download_ready())
+    
+    def download_ready(self):
+        """Called when conversion for download is complete"""
+        self.status_label.configure(
+            text='Conversion complete - Ready to download',
+            fg='#1d1d1f'
+        )
+        
+        self.download_btn.configure(
+            state='normal',
+            bg='#34a853',
+            fg='#ffffff',
+            activebackground='#2d8c46',
+            cursor='hand2',
+            text='⬇️ Download Converted File',
+            command=self.download_file
+        )
+        
+        # Trigger the download
+        self.download_file()
+    
+    def preview_success(self, preview_path):
+        self.status_label.configure(
+            text='Preview generated',
+            fg='#1d1d1f'
+        )
+        
+        # Enable download button
+        self.download_btn.configure(
+            state='normal',
+            bg='#34a853',
+            fg='#ffffff',
+            activebackground='#2d8c46',
+            cursor='hand2',
+            text='⬇️ Download Converted File',
+            command=self.download_file
+        )
+        
+        self.file_label.configure(
+            text=f'Selected: {os.path.basename(self.selected_file)}',
+            fg='#1d1d1f'
+        )
+        
+        # Update preview
+        filename = os.path.basename(preview_path)
+        self.preview_filename.configure(text=f'Preview: {os.path.basename(self.selected_file)}')
+        
+        if preview_path.endswith('.pdf'):
+            self.preview_pdf(preview_path)
+        else:
+            self.preview_docx(preview_path)
+    
+    def preview_error(self, error_msg):
+        self.status_label.configure(
+            text='Preview generation failed',
+            fg='#ff3b30'
+        )
+        
+        # Disable download button on preview error
+        self.download_btn.configure(
+            state='disabled',
+            bg='#86868b',
+            fg='#ffffff',
+            activebackground='#666666',
+            cursor=''
+        )
+        
+        self.show_preview_placeholder()
+        messagebox.showerror('Error', f'Failed to generate preview.\n\n{error_msg}')
+    
+    def conversion_error(self, error_msg):
+        self.status_label.configure(
+            text='Conversion failed',
+            fg='#ff3b30'
+        )
+        
+        # Re-enable download button
+        self.download_btn.configure(
+            state='normal',
+            bg='#34a853',
+            fg='#ffffff',
+            activebackground='#2d8c46',
+            cursor='hand2',
+            text='⬇️ Download Converted File',
+            command=self.download_file
+        )
+        
+        messagebox.showerror('Error', f'Failed to convert file.\n\n{error_msg}')
     
     def preview_pdf(self, pdf_path):
         # Clear inner frame
@@ -727,7 +863,6 @@ class ConverterApp:
             # Insert clean text with preserved paragraph formatting
             for paragraph in doc.paragraphs:
                 if paragraph.text:
-                    # Clean text thoroughly
                     clean_text = self.clean_text(paragraph.text)
                     if clean_text:
                         text_widget.insert('end', clean_text + '\n\n')
@@ -744,75 +879,6 @@ class ConverterApp:
             )
             error_label.pack(expand=True)
     
-    def conversion_success(self, output_path):
-        self.status_label.configure(
-            text='Conversion completed',
-            fg='#1d1d1f'
-        )
-        
-        # Re-enable convert button for new conversions
-        self.convert_btn.configure(
-            bg='#0066cc',
-            fg='#ffffff',
-            state='normal',
-            cursor='hand2',
-            text='Convert',
-            command=self.start_conversion
-        )
-        
-        # Enable download button - ONLY FOR MANUAL DOWNLOAD
-        self.download_btn.configure(
-            state='normal',
-            bg='#34a853',
-            fg='#ffffff',
-            activebackground='#2d8c46',
-            cursor='hand2'
-        )
-        
-        self.file_label.configure(
-            text='No file selected',
-            fg='#86868b'
-        )
-        
-        # Update preview - NO DOWNLOAD
-        filename = os.path.basename(output_path)
-        self.preview_filename.configure(text=filename)
-        
-        if output_path.endswith('.pdf'):
-            self.preview_pdf(output_path)
-        else:
-            self.preview_docx(output_path)
-        
-        self.selected_file = None
-    
-    def conversion_error(self, error_msg):
-        self.status_label.configure(
-            text='Conversion failed',
-            fg='#ff3b30'
-        )
-        
-        # Re-enable convert button
-        self.convert_btn.configure(
-            bg='#0066cc',
-            fg='#ffffff',
-            state='normal',
-            cursor='hand2',
-            text='Convert',
-            command=self.start_conversion
-        )
-        
-        # Disable download button on error
-        self.download_btn.configure(
-            state='disabled',
-            bg='#86868b',
-            fg='#ffffff',
-            activebackground='#666666',
-            cursor=''
-        )
-        
-        self.show_preview_placeholder()
-        messagebox.showerror('Error', f'Failed to convert file.')
-    
     def run(self):
         self.window.mainloop()
 
@@ -823,4 +889,5 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    app = ConverterApp()
+    app.run()
