@@ -1,53 +1,74 @@
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 import os
-from pathlib import Path
-import threading
-from pdf2docx import Converter
 import sys
 import subprocess
-
-# Handle PIL import with auto-install
-try:
-    from PIL import Image, ImageTk
-except ImportError:
-    print("Installing Pillow...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "Pillow"])
-    from PIL import Image, ImageTk
-
-# Handle fitz import with auto-install
-try:
-    import fitz
-except ImportError:
-    print("Installing PyMuPDF...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "PyMuPDF"])
-    import fitz
-
-# Handle docx import with auto-install
-try:
-    from docx import Document
-except ImportError:
-    print("Installing python-docx...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "python-docx"])
-    from docx import Document
-
-# Handle reportlab import with auto-install
-try:
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.units import inch
-except ImportError:
-    print("Installing reportlab...")
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "reportlab"])
-    from reportlab.pdfgen import canvas
-    from reportlab.lib.pagesizes import letter
-    from reportlab.lib.units import inch
-
-import io
+import importlib.util
+import threading
 import re
 import shutil
 import tempfile
+import io
+from pathlib import Path
+from xml.sax.saxutils import escape
+import xml.etree.ElementTree as ET
 
+# ============ AUTOMATIC DEPENDENCY MANAGEMENT ============
+def install_and_import(package, import_name=None):
+    """Automatically install and import a required package"""
+    if import_name is None:
+        import_name = package
+    
+    try:
+        spec = importlib.util.find_spec(import_name)
+        if spec is None:
+            raise ImportError(f"Package {package} not found")
+        module = importlib.import_module(import_name)
+        
+        if package == 'Pillow':
+            from PIL import Image, ImageTk
+            return (Image, ImageTk)
+        
+        return module
+    except ImportError:
+        print(f"Installing {package}...")
+        subprocess.check_call([sys.executable, "-m", "pip", "install", "--quiet", package])
+        print(f"{package} installed successfully!")
+        
+        if package == 'Pillow':
+            from PIL import Image, ImageTk
+            return (Image, ImageTk)
+        else:
+            return importlib.import_module(import_name)
+
+# Install and import all required packages
+PIL_Image, PIL_ImageTk = install_and_import('Pillow', 'PIL')
+Image = PIL_Image
+ImageTk = PIL_ImageTk
+
+fitz = install_and_import('PyMuPDF', 'fitz')
+
+python_docx = install_and_import('python-docx', 'docx')
+Document = python_docx.Document
+from docx.shared import Pt, Inches, RGBColor
+from docx.enum.text import WD_ALIGN_PARAGRAPH, WD_LINE_SPACING
+from docx.oxml.ns import qn
+from docx.oxml import OxmlElement
+
+reportlab = install_and_import('reportlab')
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+from reportlab.lib.units import inch
+from reportlab.lib.styles import getSampleStyleSheet, ParagraphStyle
+from reportlab.platypus import SimpleDocTemplate, Paragraph, Spacer, KeepTogether
+from reportlab.lib.enums import TA_LEFT, TA_CENTER, TA_RIGHT, TA_JUSTIFY
+from reportlab.pdfbase import pdfmetrics
+from reportlab.pdfbase.ttfonts import TTFont
+
+pdf2docx_module = install_and_import('pdf2docx', 'pdf2docx')
+Converter = pdf2docx_module.Converter
+
+# ============ MAIN APPLICATION ============
 
 class ConverterApp:
     def __init__(self):
@@ -148,7 +169,7 @@ class ConverterApp:
         )
         self.file_label.pack(fill='both')
         
-        # Download button - ONLY DOWNLOADS WHEN CLICKED
+        # Download button
         download_container = tk.Frame(left_panel, bg='#f5f5f7')
         download_container.pack(fill='x', pady=(0, 15))
         
@@ -429,13 +450,13 @@ class ConverterApp:
                 fg='#1d1d1f'
             )
             
-            # Start preview generation thread - NO DOWNLOAD, ONLY PREVIEW
+            # Start preview generation thread
             thread = threading.Thread(target=self.generate_preview)
             thread.daemon = True
             thread.start()
     
     def generate_preview(self):
-        """Generate preview only - NO FILE SAVING, NO DOWNLOAD"""
+        """Generate preview only - NO DOWNLOAD"""
         error = None
         preview_path = None
         
@@ -451,61 +472,8 @@ class ConverterApp:
                 cv.close()
                 
             else:
-                # Word to PDF preview
-                doc = Document(self.selected_file)
-                c = canvas.Canvas(preview_path, pagesize=letter)
-                width, height = letter
-                
-                y = height - inch
-                line_height = 14
-                margin = inch
-                paragraph_spacing = 8
-                
-                for paragraph in doc.paragraphs:
-                    text = paragraph.text
-                    
-                    # Clean the text thoroughly
-                    clean_text = self.clean_text(text)
-                    
-                    if clean_text:
-                        # Draw text with proper spacing
-                        c.setFont('Helvetica', 11)
-                        c.setFillColorRGB(0, 0, 0)
-                        
-                        # Handle long text wrapping
-                        words = clean_text.split()
-                        line = []
-                        
-                        for word in words:
-                            line.append(word)
-                            line_width = c.stringWidth(' '.join(line), 'Helvetica', 11)
-                            
-                            if line_width > (width - 2 * margin):
-                                line.pop()
-                                if line:
-                                    c.drawString(margin, y, ' '.join(line))
-                                    y -= line_height
-                                    line = [word]
-                                
-                                if y < margin:
-                                    c.showPage()
-                                    y = height - margin
-                                    c.setFont('Helvetica', 11)
-                        
-                        # Draw remaining text
-                        if line:
-                            c.drawString(margin, y, ' '.join(line))
-                            y -= line_height
-                        
-                        # Add paragraph spacing
-                        y -= paragraph_spacing
-                        
-                        if y < margin:
-                            c.showPage()
-                            y = height - margin
-                            c.setFont('Helvetica', 11)
-                
-                c.save()
+                # Word to PDF preview - WITH COMPLETE FORMATTING PRESERVATION
+                self.convert_docx_to_pdf_preserve_formatting(self.selected_file, preview_path)
                 
         except Exception as e:
             error = str(e)
@@ -518,35 +486,178 @@ class ConverterApp:
             self.preview_file = preview_path
             self.window.after(0, lambda path=preview_path: self.preview_success(path))
     
+    def convert_docx_to_pdf_preserve_formatting(self, docx_path, pdf_path):
+        """Convert DOCX to PDF while preserving ALL formatting, spacing, and layout"""
+        doc = Document(docx_path)
+        
+        # Create PDF document with proper margins
+        doc_template = SimpleDocTemplate(
+            pdf_path,
+            pagesize=letter,
+            rightMargin=72,
+            leftMargin=72,
+            topMargin=72,
+            bottomMargin=72
+        )
+        
+        story = []
+        
+        # Process each paragraph individually to preserve spacing
+        for paragraph in doc.paragraphs:
+            # Get paragraph formatting
+            p_format = paragraph.paragraph_format
+            
+            # Calculate spacing values in points
+            space_before = self.get_paragraph_spacing(p_format.space_before)
+            space_after = self.get_paragraph_spacing(p_format.space_after)
+            line_spacing = self.get_line_spacing(p_format.line_spacing)
+            
+            # Get alignment
+            alignment = self.get_paragraph_alignment(paragraph.alignment)
+            
+            # Get indentation
+            left_indent = self.get_indent(p_format.left_indent)
+            right_indent = self.get_indent(p_format.right_indent)
+            first_line_indent = self.get_indent(p_format.first_line_indent)
+            
+            # Add space before paragraph if needed
+            if space_before > 0:
+                story.append(Spacer(1, space_before))
+            
+            # Process runs to preserve inline formatting
+            if len(paragraph.runs) > 0:
+                # Build formatted text with proper XML tags
+                formatted_text = self.build_formatted_text(paragraph.runs)
+                
+                if formatted_text:
+                    # Create paragraph style with all formatting
+                    style_name = f'ParaStyle_{len(story)}'
+                    p_style = ParagraphStyle(
+                        style_name,
+                        parent=getSampleStyleSheet()['Normal'],
+                        fontName='Helvetica',
+                        fontSize=11,
+                        leading=line_spacing,
+                        alignment=alignment,
+                        leftIndent=left_indent,
+                        rightIndent=right_indent,
+                        firstLineIndent=first_line_indent
+                    )
+                    
+                    # Create paragraph and add to story
+                    p = Paragraph(formatted_text, p_style)
+                    story.append(p)
+            
+            # Add space after paragraph if needed
+            if space_after > 0:
+                story.append(Spacer(1, space_after))
+        
+        # Build the PDF
+        doc_template.build(story)
+    
+    def get_paragraph_spacing(self, spacing_value):
+        """Convert Word spacing to points"""
+        if spacing_value is None:
+            return 0
+        try:
+            return spacing_value.pt
+        except:
+            return 0
+    
+    def get_line_spacing(self, line_spacing):
+        """Convert Word line spacing to points"""
+        if line_spacing is None:
+            return 14  # Default line spacing
+        
+        try:
+            if hasattr(line_spacing, 'pt'):
+                return line_spacing.pt
+            else:
+                # If it's a multiple, convert to points (assuming 12pt base)
+                return line_spacing * 12
+        except:
+            return 14
+    
+    def get_indent(self, indent_value):
+        """Convert Word indent to points"""
+        if indent_value is None:
+            return 0
+        try:
+            return indent_value.pt
+        except:
+            return 0
+    
+    def get_paragraph_alignment(self, alignment):
+        """Convert Word alignment to ReportLab alignment"""
+        if alignment is None:
+            return TA_LEFT
+        
+        alignment_map = {
+            WD_ALIGN_PARAGRAPH.LEFT: TA_LEFT,
+            WD_ALIGN_PARAGRAPH.CENTER: TA_CENTER,
+            WD_ALIGN_PARAGRAPH.RIGHT: TA_RIGHT,
+            WD_ALIGN_PARAGRAPH.JUSTIFY: TA_JUSTIFY
+        }
+        return alignment_map.get(alignment, TA_LEFT)
+    
+    def build_formatted_text(self, runs):
+        """Build formatted text from runs with proper XML tags"""
+        formatted_parts = []
+        
+        for run in runs:
+            text = run.text
+            if not text:
+                continue
+            
+            # Clean the text
+            clean_text = self.clean_text(text)
+            if not clean_text:
+                continue
+            
+            # Escape XML characters
+            safe_text = self.escape_xml_chars(clean_text)
+            
+            # Apply formatting tags
+            if run.bold:
+                safe_text = f"<b>{safe_text}</b>"
+            if run.italic:
+                safe_text = f"<i>{safe_text}</i>"
+            if run.underline:
+                safe_text = f"<u>{safe_text}</u>"
+            
+            formatted_parts.append(safe_text)
+        
+        return ''.join(formatted_parts)
+    
+    def escape_xml_chars(self, text):
+        """Escape XML special characters for ReportLab"""
+        if not text:
+            return ""
+        text = text.replace('&', '&amp;')
+        text = text.replace('<', '&lt;')
+        text = text.replace('>', '&gt;')
+        return text
+    
     def clean_text(self, text):
-        """Remove all hidden characters and artifacts"""
+        """Clean text while preserving all meaningful characters"""
         if not text:
             return ""
         
-        # Remove non-printable characters except spaces and newlines
-        cleaned = ''.join(char for char in text if ord(char) >= 32 or char == '\n' or char == '\t')
-        
-        # Replace multiple spaces with single space
-        cleaned = re.sub(r' +', ' ', cleaned)
-        
-        # Fix spacing after periods
-        cleaned = re.sub(r'\.(?=[^\s])', '. ', cleaned)
-        cleaned = re.sub(r'\. +', '. ', cleaned)
+        # Remove only absolute control characters
+        cleaned = ''.join(char for char in text if ord(char) >= 32 or char == '\n' or char == '\t' or char == '\r')
         
         # Remove any remaining control characters
-        cleaned = re.sub(r'[\x00-\x1f\x7f-\x9f]', '', cleaned)
+        cleaned = re.sub(r'[\x00-\x08\x0b\x0c\x0e-\x1f\x7f]', '', cleaned)
         
-        return cleaned.strip()
+        return cleaned
     
     def download_file(self):
         """Download the converted file - ONLY WHEN DOWNLOAD BUTTON IS CLICKED"""
         if not self.converted_file:
-            # If no converted file exists, convert first then download
             self.start_conversion_for_download()
             return
             
         if self.converted_file and os.path.exists(self.converted_file):
-            # Ask where to save the file
             save_path = filedialog.asksaveasfilename(
                 defaultextension=os.path.splitext(self.converted_file)[1],
                 filetypes=[
@@ -557,14 +668,13 @@ class ConverterApp:
             
             if save_path:
                 try:
-                    # Copy file to selected location
                     shutil.copy2(self.converted_file, save_path)
                     messagebox.showinfo('Download Complete', f'File saved to:\n{save_path}')
                 except Exception as e:
                     messagebox.showerror('Download Failed', f'Could not save file:\n{str(e)}')
     
     def start_conversion_for_download(self):
-        """Convert file for download - ONLY CALLED WHEN DOWNLOAD BUTTON IS CLICKED"""
+        """Convert file for download"""
         if not self.selected_file:
             return
         
@@ -582,7 +692,6 @@ class ConverterApp:
             fg='#1d1d1f'
         )
         
-        # Start conversion thread
         thread = threading.Thread(target=self.convert_for_download)
         thread.daemon = True
         thread.start()
@@ -593,70 +702,17 @@ class ConverterApp:
         output_path = None
         
         try:
-            # Create permanent file in user's temp directory
             output_path = str(Path(self.selected_file).with_suffix('.docx' if self.current_mode == 'pdf' else '.pdf'))
             
-            # Ensure output directory exists
             os.makedirs(os.path.dirname(output_path) if os.path.dirname(output_path) else '.', exist_ok=True)
             
             if self.current_mode == 'pdf':
-                # PDF to Word conversion
                 cv = Converter(self.selected_file)
                 cv.convert(output_path, start=0, end=None)
                 cv.close()
                 
             else:
-                # Word to PDF conversion
-                doc = Document(self.selected_file)
-                c = canvas.Canvas(output_path, pagesize=letter)
-                width, height = letter
-                
-                y = height - inch
-                line_height = 14
-                margin = inch
-                paragraph_spacing = 8
-                
-                for paragraph in doc.paragraphs:
-                    text = paragraph.text
-                    
-                    # Clean the text thoroughly
-                    clean_text = self.clean_text(text)
-                    
-                    if clean_text:
-                        c.setFont('Helvetica', 11)
-                        c.setFillColorRGB(0, 0, 0)
-                        
-                        words = clean_text.split()
-                        line = []
-                        
-                        for word in words:
-                            line.append(word)
-                            line_width = c.stringWidth(' '.join(line), 'Helvetica', 11)
-                            
-                            if line_width > (width - 2 * margin):
-                                line.pop()
-                                if line:
-                                    c.drawString(margin, y, ' '.join(line))
-                                    y -= line_height
-                                    line = [word]
-                                
-                                if y < margin:
-                                    c.showPage()
-                                    y = height - margin
-                                    c.setFont('Helvetica', 11)
-                        
-                        if line:
-                            c.drawString(margin, y, ' '.join(line))
-                            y -= line_height
-                        
-                        y -= paragraph_spacing
-                        
-                        if y < margin:
-                            c.showPage()
-                            y = height - margin
-                            c.setFont('Helvetica', 11)
-                
-                c.save()
+                self.convert_docx_to_pdf_preserve_formatting(self.selected_file, output_path)
                 
         except Exception as e:
             error = str(e)
@@ -684,7 +740,6 @@ class ConverterApp:
             command=self.download_file
         )
         
-        # Trigger the download
         self.download_file()
     
     def preview_success(self, preview_path):
@@ -693,7 +748,6 @@ class ConverterApp:
             fg='#1d1d1f'
         )
         
-        # Enable download button
         self.download_btn.configure(
             state='normal',
             bg='#34a853',
@@ -709,8 +763,6 @@ class ConverterApp:
             fg='#1d1d1f'
         )
         
-        # Update preview
-        filename = os.path.basename(preview_path)
         self.preview_filename.configure(text=f'Preview: {os.path.basename(self.selected_file)}')
         
         if preview_path.endswith('.pdf'):
@@ -724,7 +776,6 @@ class ConverterApp:
             fg='#ff3b30'
         )
         
-        # Disable download button on preview error
         self.download_btn.configure(
             state='disabled',
             bg='#86868b',
@@ -742,7 +793,6 @@ class ConverterApp:
             fg='#ff3b30'
         )
         
-        # Re-enable download button
         self.download_btn.configure(
             state='normal',
             bg='#34a853',
@@ -763,7 +813,6 @@ class ConverterApp:
         try:
             doc = fitz.open(pdf_path)
             
-            # Create container for pages
             pages_container = tk.Frame(self.preview_inner, bg='#ffffff')
             pages_container.pack(expand=True, fill='both', padx=30, pady=30)
             
@@ -772,23 +821,18 @@ class ConverterApp:
             for page_num in range(len(doc)):
                 page = doc[page_num]
                 
-                # Calculate zoom to fit width
                 zoom = canvas_width / page.rect.width
                 mat = fitz.Matrix(zoom, zoom)
                 pix = page.get_pixmap(matrix=mat, alpha=False)
                 
-                # Convert to PIL Image
                 img_data = pix.tobytes("png")
                 img = Image.open(io.BytesIO(img_data))
                 
-                # Convert to PhotoImage
                 self.preview_image = ImageTk.PhotoImage(img)
                 
-                # Page frame
                 page_frame = tk.Frame(pages_container, bg='#ffffff')
                 page_frame.pack(pady=(0, 20))
                 
-                # Page number
                 if len(doc) > 1:
                     page_label = tk.Label(
                         page_frame,
@@ -799,7 +843,6 @@ class ConverterApp:
                     )
                     page_label.pack(pady=(0, 5))
                 
-                # Page image
                 image_label = tk.Label(
                     page_frame,
                     image=self.preview_image,
@@ -828,11 +871,9 @@ class ConverterApp:
         try:
             doc = Document(docx_path)
             
-            # Create container
             container = tk.Frame(self.preview_inner, bg='#ffffff')
             container.pack(expand=True, fill='both', padx=30, pady=30)
             
-            # Header
             header_frame = tk.Frame(container, bg='#ffffff')
             header_frame.pack(fill='x', pady=(0, 20))
             
@@ -844,7 +885,6 @@ class ConverterApp:
                 fg='#1d1d1f'
             ).pack(anchor='w')
             
-            # Content
             content_frame = tk.Frame(container, bg='#ffffff')
             content_frame.pack(fill='both', expand=True)
             
@@ -860,12 +900,13 @@ class ConverterApp:
             )
             text_widget.pack(fill='both', expand=True)
             
-            # Insert clean text with preserved paragraph formatting
             for paragraph in doc.paragraphs:
-                if paragraph.text:
+                if paragraph.text.strip():
                     clean_text = self.clean_text(paragraph.text)
                     if clean_text:
                         text_widget.insert('end', clean_text + '\n\n')
+                else:
+                    text_widget.insert('end', '\n')
             
             text_widget.configure(state='disabled')
             
@@ -889,5 +930,4 @@ def main():
 
 
 if __name__ == "__main__":
-    app = ConverterApp()
-    app.run()
+    main()
