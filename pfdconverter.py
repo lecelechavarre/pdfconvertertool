@@ -147,7 +147,7 @@ class ConverterApp:
             'Convert Word documents to PDF format',
             'docx',
             1
-        )
+        ) 
         
         # File info frame
         info_container = tk.Frame(left_panel, bg='#f5f5f7')
@@ -931,3 +931,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
