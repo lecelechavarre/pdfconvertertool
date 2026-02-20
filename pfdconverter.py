@@ -42,7 +42,7 @@ def install_and_import(package, import_name=None):
             return importlib.import_module(import_name)
 
 # Install and import all required packages
-PIL_Image, PIL_ImageTk = install_and_import('Pillow', 'PIL')
+PIL_Image, PIL_ImageTk = install_and_import('Pillow', 'PIL') 
 Image = PIL_Image
 ImageTk = PIL_ImageTk
 
@@ -931,4 +931,5 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
