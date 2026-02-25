@@ -72,5 +72,5 @@ pdfconvertertool/
 │
 ├── pdfconverter.py
 ├── README.md
-└──  requirements.txt
+└── requirements.txt
 ```
