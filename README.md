@@ -67,9 +67,10 @@ python pfdconverter.py
 - Preserves formatting like spacing, alignment, and inline styles.
 
 ## Project Structure
-
+```
 pdfconvertertool/  
 │
 ├── pdfconverter.py
 ├── README.md
 └──  requirements.txt
+```
