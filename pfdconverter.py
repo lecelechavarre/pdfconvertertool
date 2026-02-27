@@ -68,7 +68,7 @@ from reportlab.pdfbase.ttfonts import TTFont
 pdf2docx_module = install_and_import('pdf2docx', 'pdf2docx')
 Converter = pdf2docx_module.Converter
 
-# ============ MAIN APPLICATION ============
+# ============ MAIN APPLICATION ============ 
 
 class ConverterApp:
     def __init__(self):
@@ -931,5 +931,6 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
